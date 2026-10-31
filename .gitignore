@@ -17,3 +17,15 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Databases
+*.db
+*.sqlite3
+
+# Browser Automation & Profiles
+chrome_profile/
+recordings/
+tests/*.png
+*.webm
+*.mp4
+
+
