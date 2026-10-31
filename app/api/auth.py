@@ -17,7 +17,7 @@ from app.services.auth_service import AuthService
 router = APIRouter()
 security_scheme = HTTPBearer()
 
-# ================= ১. সাইনআপ ও ওটিপি ভেরিফাই =================
+# ================= 1. Signup & OTP Verification Endpoints =================
 @router.post("/signup", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
 def signup_endpoint(
     payload: SignupRequest,
@@ -34,7 +34,7 @@ def verify_signup_endpoint(
     return AuthService.verify_signup(db, payload)
 
 
-# ================= ২. লগইন, ওটিপি ও ডিভাইস লিমিট (২ পিসি, ১ ফোন) =================
+# ================= 2. Login, 2FA OTP & Device Session Endpoints =================
 @router.post("/login", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
 def login_endpoint(
     payload: LoginRequest,
@@ -51,7 +51,7 @@ def verify_login_endpoint(
     return AuthService.verify_login(db, payload)
 
 
-# ================= ৩. ফরগট ও রিসেট পাসওয়ার্ড =================
+# ================= 3. Forgot & Reset Password Endpoints =================
 @router.post("/forgot-password", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
 def forgot_password_endpoint(
     payload: ForgotPasswordRequest,
@@ -68,8 +68,8 @@ def reset_password_endpoint(
     return AuthService.reset_password(db, payload)
 
 
-# ================= ৪. ডিভাইস সেশন টেস্ট করার প্রোফাইল এপিআই =================
-@router.get("/me", summary="টোকেন ও ডিভাইস সচল আছে কি না চেক করুন")
+# ================= 4. Authenticated Profile & Session Health Endpoint =================
+@router.get("/me", summary="Validate active token and device session")
 def get_my_profile(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
     db: Session = Depends(get_db)
@@ -79,9 +79,9 @@ def get_my_profile(
         user_id = int(data["sub"])
         session_id = data["session_id"]
     except Exception:
-        raise HTTPException(status_code=401, detail="টোকেনটি সঠিক নয় বা মেয়াদ শেষ!")
+        raise HTTPException(status_code=401, detail="Invalid token or session expired.")
 
-    # ডাটাবেজে চেক করা হচ্ছে এই ডিভাইস সেশনটি এখনও চালু (is_active=True) আছে কি না
+    # Validate that this specific device session is still active (is_active=True)
     session_record = db.scalar(
         select(DeviceSession).where(
             DeviceSession.id == session_id,
@@ -91,7 +91,7 @@ def get_my_profile(
     if not session_record:
         raise HTTPException(
             status_code=401,
-            detail="অন্য ডিভাইসে লগইন করার কারণে আপনার এই ডিভাইসটি স্বয়ংক্রিয়ভাবে লগআউট হয়ে গেছে!"
+            detail="Session revoked: You have been logged out because another device logged in."
         )
 
     user = db.scalar(select(User).where(User.id == user_id))

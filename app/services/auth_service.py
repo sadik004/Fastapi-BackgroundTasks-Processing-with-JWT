@@ -18,7 +18,7 @@ from app.services.email_service import EmailService
 
 logger = logging.getLogger("uvicorn.error")
 
-# ডিভাইস লিমিট রুল: সর্বোচ্চ ২টি কম্পিউটার এবং ১টি ফোন
+# Hardware Device Concurrency Limit: Maximum 2 Computers and 1 Mobile Phone per User
 DEVICE_LIMITS = {
     "computer": 2,
     "phone": 1
@@ -26,7 +26,7 @@ DEVICE_LIMITS = {
 
 class AuthService:
 
-    # --- কমন হেল্পার: ওটিপি তৈরি, ডাটাবেজে সেভ এবং ইমেইলে পাঠানো ---
+    # --- Common Helper: Generate OTP, Persist to Database & Dispatch via BackgroundTasks ---
     @staticmethod
     def _send_otp(
         db: Session,
@@ -36,7 +36,7 @@ class AuthService:
         subject: str,
         background_tasks: BackgroundTasks
     ) -> str:
-        # আগের কোনো পুরনো ওটিপি থাকলে মুছে ফেলা
+        # Invalidate any existing active OTP for this purpose
         db.execute(delete(OTPCode).where(OTPCode.email == email, OTPCode.purpose == purpose))
         
         otp = generate_otp(6)
@@ -46,7 +46,7 @@ class AuthService:
         db.add(db_otp)
         db.commit()
 
-        # ১. সরাসরি টার্মিনাল আউটপুটে (stdout) সেফ প্রিন্ট (Windows cp1252 কমপ্যাটিবল)
+        # 1. Output safe diagnostic banner to stdout (cp1252 / Windows safe)
         banner = (
             f"\n"
             f"======================================================\n"
@@ -62,13 +62,13 @@ class AuthService:
             sys.stdout.write(banner.encode("ascii", errors="replace").decode("ascii"))
             sys.stdout.flush()
 
-        # ২. ব্যাকগ্রাউন্ডে আসল ইমেইল কিউতে দিয়ে দেওয়া
-        msg = f"আপনার {subject}-এর ওটিপি কোড হলো: {otp}। এটি {settings.OTP_EXPIRE_MINUTES} মিনিট কার্যকর থাকবে।"
+        # 2. Queue asynchronous email delivery via FastAPI BackgroundTasks
+        msg = f"Your {subject} verification code is: {otp}. This code is valid for {settings.OTP_EXPIRE_MINUTES} minutes. (আপনার ওটিপি কোড হলো: {otp})"
         background_tasks.add_task(EmailService.send_welcome_email, email, subject, user_name, msg)
 
         return otp
 
-    # --- কমন হেল্পার: ওটিপি সঠিক ও মেয়াদ আছে কি না তা চেক করা ---
+    # --- Common Helper: Validate OTP Existence and Expiration Window ---
     @staticmethod
     def _verify_otp_record(db: Session, email: str, otp_code: str, purpose: str) -> None:
         stmt = select(OTPCode).where(
@@ -78,36 +78,36 @@ class AuthService:
         )
         record = db.scalar(stmt)
         if not record:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ভুল ওটিপি কোড!")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP code.")
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         exp = record.expires_at.replace(tzinfo=None)
         if now > exp:
             db.delete(record)
             db.commit()
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ওটিপির মেয়াদ শেষ হয়ে গেছে!")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP has expired.")
 
-        # ওটিপি সফলভাবে ব্যবহার হওয়ার পর মুছে ফেলা (One-Time Use)
+        # Invalidate OTP record immediately upon successful consumption (Strict Single-Use)
         db.delete(record)
         db.commit()
 
 
-    # ================= ১. সাইনআপ (Signup with OTP) =================
+    # ================= 1. User Registration Flow (Signup with 2FA OTP) =================
     @staticmethod
     def signup(db: Session, payload: SignupRequest, background_tasks: BackgroundTasks):
         existing_user = db.scalar(select(User).where(User.email == payload.email))
         if existing_user and existing_user.is_verified:
-            raise HTTPException(status_code=400, detail="এই ইমেইলে আগেই অ্যাকাউন্ট খোলা আছে!")
+            raise HTTPException(status_code=400, detail="An account with this email already exists.")
 
         if existing_user and not existing_user.is_verified:
-            # আগে সাইনআপ করে ভেরিফাই না করে থাকলে তথ্য আপডেট করা
+            # Update credentials for unverified existing profile
             existing_user.name = payload.name
             existing_user.address = payload.address
             existing_user.hashed_password = hash_password(payload.password)
             db.commit()
             user = existing_user
         else:
-            # নতুন ইউজার তৈরি (is_verified=False অবস্থায়)
+            # Create new unverified user entity
             user = User(
                 name=payload.name,
                 email=payload.email,
@@ -121,7 +121,7 @@ class AuthService:
         otp = AuthService._send_otp(db, user.email, user.name, "signup", "Account Signup OTP", background_tasks)
         return {
             "status": "otp_sent",
-            "message": f"{user.email}-এ সাইনআপ ওটিপি পাঠানো হয়েছে।",
+            "message": f"Verification OTP sent to {user.email}.",
             "dev_otp": otp
         }
 
@@ -130,28 +130,28 @@ class AuthService:
         AuthService._verify_otp_record(db, payload.email, payload.otp_code, "signup")
         user = db.scalar(select(User).where(User.email == payload.email))
         if not user:
-            raise HTTPException(status_code=404, detail="ইউজার পাওয়া যায়নি!")
+            raise HTTPException(status_code=404, detail="User not found.")
         
         user.is_verified = True
         db.commit()
-        return {"status": "verified", "message": "অভিনন্দন! আপনার অ্যাকাউন্ট সফলভাবে ভেরিফাই ও চালু হয়েছে।"}
+        return {"status": "verified", "message": "Congratulations! Your account has been verified successfully."}
 
 
-    # ================= ২. লগইন ও ডিভাইস লিমিট (Login with OTP) =================
+    # ================= 2. Authentication Flow with Device Session Concurrency =================
     @staticmethod
     def login(db: Session, payload: LoginRequest, background_tasks: BackgroundTasks):
         user = db.scalar(select(User).where(User.email == payload.email))
         if not user or not verify_password(payload.password, user.hashed_password):
-            raise HTTPException(status_code=401, detail="ইমেইল বা পাসওয়ার্ড ভুল!")
+            raise HTTPException(status_code=401, detail="Invalid email or password.")
 
         if not user.is_verified:
-            raise HTTPException(status_code=403, detail="আপনার অ্যাকাউন্ট এখনও ওটিপি দিয়ে ভেরিফাই করা হয়নি!")
+            raise HTTPException(status_code=403, detail="Account unverified. Please complete OTP verification.")
 
-        # পাসওয়ার্ড মিলেছে, কিন্তু টোকেন না দিয়ে আগে ওটিপি পাঠানো হচ্ছে
+        # Password matched: Dispatch 2FA OTP instead of direct token issuance
         otp = AuthService._send_otp(db, user.email, user.name, "login", f"Login Verification OTP ({datetime.now().strftime('%H:%M:%S')})", background_tasks)
         return {
             "status": "otp_required",
-            "message": "পাসওয়ার্ড সঠিক! লগইন সম্পন্ন করতে ইমেইলে যাওয়া ওটিপি দিন।",
+            "message": "Password verified! Please submit the OTP sent to your email to complete login.",
             "dev_otp": otp
         }
 
@@ -160,7 +160,7 @@ class AuthService:
         AuthService._verify_otp_record(db, payload.email, payload.otp_code, "login")
         user = db.scalar(select(User).where(User.email == payload.email))
 
-        # --- ২টি কম্পিউটার ও ১টি ফোন লিমিট চেক করার আসল লজিক ---
+        # --- Enforce Multi-Device Limits: Max 2 Computers, 1 Phone per User ---
         stmt = (
             select(DeviceSession)
             .where(
@@ -168,20 +168,20 @@ class AuthService:
                 DeviceSession.device_type == payload.device_type,
                 DeviceSession.is_active == True
             )
-            .order_by(DeviceSession.created_at.asc())  # সবচেয়ে পুরনো লগইন সবার আগে থাকবে
+            .order_by(DeviceSession.created_at.asc())  # Oldest active sessions first (FIFO)
         )
         active_sessions = list(db.scalars(stmt).all())
         max_allowed = DEVICE_LIMITS[payload.device_type]
 
         logged_out_msg = ""
         if len(active_sessions) >= max_allowed:
-            # লিমিট ছাড়িয়ে গেছে! সবচেয়ে পুরনো ডিভাইসগুলোকে অটো-লগআউট (is_active=False) করে দেওয়া হচ্ছে
+            # Threshold exceeded: Evict oldest device sessions (First-In, First-Out)
             to_logout = active_sessions[: len(active_sessions) - max_allowed + 1]
             for old_session in to_logout:
                 old_session.is_active = False
-            logged_out_msg = f" (লিমিট অতিক্রম করায় আপনার পুরনো {payload.device_type} লগআউট করে দেওয়া হয়েছে!)"
+            logged_out_msg = f" (Device limit reached: Oldest {payload.device_type} session has been automatically logged out.)"
 
-        # নতুন ডিভাইস সেশন ডাটাবেজে যোগ করা
+        # Register new active device session
         new_session = DeviceSession(
             user_id=user.id,
             device_type=payload.device_type,
@@ -192,28 +192,28 @@ class AuthService:
         db.commit()
         db.refresh(new_session)
 
-        # আসল JWT টোকেন তৈরি
+        # Issue cryptographically signed JWT bearer token
         token = create_access_token(user_id=user.id, session_id=new_session.id)
         return {
             "status": "login_success",
-            "message": f"লগইন সফল হয়েছে!{logged_out_msg}",
+            "message": f"Login successful!{logged_out_msg}",
             "access_token": token,
             "token_type": "bearer",
             "device_info": f"{payload.device_type} ({payload.device_name})"
         }
 
 
-    # ================= ৩. ফরগট পাসওয়ার্ড (Forgot Password with OTP) =================
+    # ================= 3. Password Recovery Flow (Forgot & Reset with OTP) =================
     @staticmethod
     def forgot_password(db: Session, payload: ForgotPasswordRequest, background_tasks: BackgroundTasks):
         user = db.scalar(select(User).where(User.email == payload.email))
         if not user:
-            raise HTTPException(status_code=404, detail="এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি!")
+            raise HTTPException(status_code=404, detail="No account registered with this email.")
 
         otp = AuthService._send_otp(db, user.email, user.name, "forgot", "Password Reset OTP", background_tasks)
         return {
             "status": "otp_sent",
-            "message": "পাসওয়ার্ড রিসেট করার জন্য আপনার ইমেইলে ওটিপি পাঠানো হয়েছে।",
+            "message": "Password reset OTP has been sent to your email address.",
             "dev_otp": otp
         }
 
@@ -222,13 +222,13 @@ class AuthService:
         AuthService._verify_otp_record(db, payload.email, payload.otp_code, "forgot")
         user = db.scalar(select(User).where(User.email == payload.email))
         
-        # নতুন পাসওয়ার্ড Argon2 দিয়ে লক করে সেভ করা
+        # Hash new password with Argon2id and update profile
         user.hashed_password = hash_password(payload.new_password)
         
-        # পাসওয়ার্ড রিসেট হলে নিরাপত্তার জন্য সব পুরনো ডিভাইস সেশন লগআউট করে দেওয়া
+        # Invalidate all active device sessions upon password reset for security
         stmt = select(DeviceSession).where(DeviceSession.user_id == user.id, DeviceSession.is_active == True)
         for s in db.scalars(stmt).all():
             s.is_active = False
 
         db.commit()
-        return {"status": "password_reset", "message": "পাসওয়ার্ড সফলভাবে পরিবর্তন হয়েছে! অনুগ্রহ করে নতুন করে লগইন করুন।"}
+        return {"status": "password_reset", "message": "Password changed successfully. Please log in with your new password."}

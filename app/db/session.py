@@ -1,24 +1,24 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from app.core.config import settings  # ১ নম্বর ফাইল থেকে ডাটাবেজের ঠিকানা নিল
+from app.core.config import settings
 
-# ১. SQLite হলে মাল্টি-থ্রেড চেক বন্ধ রাখা, আর PostgreSQL হলে খালি রাখা
+# 1. Thread check configuration for SQLite / PostgreSQL
 connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
 
-# ২. ডাটাবেজের মূল ইঞ্জিন তৈরি
+# 2. Initialize SQLAlchemy database engine
 engine = create_engine(
     settings.DATABASE_URL,
     connect_args=connect_args
 )
 
-# ৩. ডাটাবেজে কথা বলার জন্য সেশন ফ্যাক্টরি তৈরি
+# 3. Create scoped session factory for persistence operations
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# ৪. সব টেবিল বানানোর মূল ভিত্তি (SQLAlchemy 2.0 আধুনিক স্ট্যান্ডার্ড)
+# 4. Declarative base class for all database entities (SQLAlchemy 2.0 Standard)
 class Base(DeclarativeBase):
     pass
 
-# ৫. প্রতি রিকোয়েস্টে ডাটাবেজ কানেকশন খুলে কাজ শেষে অটোমেটিক বন্ধ করার ফাংশন
+# 5. Dependency generator managing transactional database session lifecycle
 def get_db():
     db = SessionLocal()
     try:

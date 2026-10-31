@@ -12,7 +12,7 @@ class EmailService:
         recipient: str,
         subject: str,
         user_name: str,
-        message_body: str = "আমাদের প্ল্যাটফর্মে আপনার অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে।"
+        message_body: str = "Your account has been successfully created on our platform."
     ) -> None:
         try:
             message = EmailMessage()
@@ -22,7 +22,7 @@ class EmailService:
             message["Date"] = formatdate(localtime=True)
             message["Message-ID"] = make_msgid(domain="teamrabbil.com")
             
-            body_text = f"হ্যালো {user_name},\n\n{message_body}\n\nধন্যবাদ,\nSports App টিম"
+            body_text = f"Hello {user_name},\n\n{message_body}\n\nBest regards,\nSports App Team"
             message.set_content(body_text)
 
             use_ssl = (settings.SMTP_PORT == 465)

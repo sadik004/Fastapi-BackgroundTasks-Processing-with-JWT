@@ -8,22 +8,22 @@ router = APIRouter()
     "/send",
     response_model=EmailResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="ইমেইল পাঠানোর এপিআই"
+    summary="Dispatch async non-blocking transactional email"
 )
 async def send_email_endpoint(
     payload: EmailRequest,
     background_tasks: BackgroundTasks
 ):
-    # payload.message-ও সাথে পাঠিয়ে দেওয়া হলো
+    # Enqueue background email delivery task without blocking HTTP thread
     background_tasks.add_task(
         EmailService.send_welcome_email,
         recipient=payload.recipient_email,
         subject=payload.subject,
         user_name=payload.user_name,
-        message_body=payload.message  # <-- পাস করা হলো
+        message_body=payload.message
     )
     
     return EmailResponse(
         status="queued",
-        message=f"{payload.recipient_email} ঠিকানায় ইমেইল পাঠানোর কাজ কিউতে নেওয়া হয়েছে।"
+        message=f"Email delivery for {payload.recipient_email} has been queued successfully."
     )
